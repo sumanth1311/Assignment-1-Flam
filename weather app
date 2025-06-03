@@ -1,0 +1,199 @@
+// WeatherTrackApp - Single File Implementation (Simplified)
+
+// 1. WeatherEntity.java
+@Entity(tableName = "weather_table")
+public class WeatherEntity {
+    @PrimaryKey(autoGenerate = true)
+    public int id;
+
+    public float temperature;
+    public int humidity;
+    public String condition;
+    public long timestamp;
+}
+
+// 2. WeatherDao.java
+@Dao
+public interface WeatherDao {
+    @Insert
+    void insert(WeatherEntity weather);
+
+    @Query("SELECT * FROM weather_table ORDER BY timestamp DESC LIMIT 28")
+    LiveData<List<WeatherEntity>> getLast7Days();
+}
+
+// 3. WeatherDatabase.java
+@Database(entities = {WeatherEntity.class}, version = 1)
+public abstract class WeatherDatabase extends RoomDatabase {
+    public abstract WeatherDao weatherDao();
+
+    private static volatile WeatherDatabase INSTANCE;
+
+    public static WeatherDatabase getInstance(Context context) {
+        if (INSTANCE == null) {
+            synchronized (WeatherDatabase.class) {
+                if (INSTANCE == null) {
+                    INSTANCE = Room.databaseBuilder(context.getApplicationContext(),
+                            WeatherDatabase.class, "weather_db").build();
+                }
+            }
+        }
+        return INSTANCE;
+    }
+}
+
+// 4. MockWeatherApi.java
+public class MockWeatherApi {
+    public static WeatherEntity getFakeWeather() {
+        Random random = new Random();
+        WeatherEntity entity = new WeatherEntity();
+        entity.temperature = 20 + random.nextFloat() * 10;
+        entity.humidity = 40 + random.nextInt(50);
+        entity.condition = "Sunny";
+        entity.timestamp = System.currentTimeMillis();
+        return entity;
+    }
+}
+
+// 5. WeatherRepository.java
+public class WeatherRepository {
+    private final WeatherDao dao;
+
+    public WeatherRepository(Context context) {
+        dao = WeatherDatabase.getInstance(context).weatherDao();
+    }
+
+    public void fetchAndSaveWeather(Consumer<Boolean> callback) {
+        Executors.newSingleThreadExecutor().execute(() -> {
+            try {
+                WeatherEntity data = MockWeatherApi.getFakeWeather();
+                dao.insert(data);
+                callback.accept(true);
+            } catch (Exception e) {
+                callback.accept(false);
+            }
+        });
+    }
+
+    public LiveData<List<WeatherEntity>> getLast7Days() {
+        return dao.getLast7Days();
+    }
+}
+
+// 6. WeatherViewModel.java
+public class WeatherViewModel extends AndroidViewModel {
+    private final WeatherRepository repository;
+    private final MutableLiveData<Boolean> fetchResult = new MutableLiveData<>();
+
+    public WeatherViewModel(@NonNull Application application) {
+        super(application);
+        repository = new WeatherRepository(application);
+    }
+
+    public LiveData<List<WeatherEntity>> getLast7Days() {
+        return repository.getLast7Days();
+    }
+
+    public void refreshWeather() {
+        repository.fetchAndSaveWeather(fetchResult::postValue);
+    }
+
+    public LiveData<Boolean> getFetchResult() {
+        return fetchResult;
+    }
+}
+
+// 7. WeatherWorker.java
+public class WeatherWorker extends Worker {
+    public WeatherWorker(@NonNull Context context, @NonNull WorkerParameters params) {
+        super(context, params);
+    }
+
+    @NonNull
+    @Override
+    public Result doWork() {
+        WeatherRepository repo = new WeatherRepository(getApplicationContext());
+        repo.fetchAndSaveWeather(success -> {});
+        return Result.success();
+    }
+}
+
+// 8. MainActivity.java
+public class MainActivity extends AppCompatActivity {
+    private WeatherViewModel viewModel;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        viewModel = new ViewModelProvider(this).get(WeatherViewModel.class);
+
+        RecyclerView recycler = findViewById(R.id.weatherList);
+        Button refreshBtn = findViewById(R.id.refreshButton);
+        TextView errorText = findViewById(R.id.errorText);
+
+        WeatherAdapter adapter = new WeatherAdapter();
+        recycler.setAdapter(adapter);
+
+        viewModel.getLast7Days().observe(this, adapter::submitList);
+
+        viewModel.getFetchResult().observe(this, success -> {
+            if (!success) {
+                errorText.setText("Failed to fetch weather. Check internet.");
+                errorText.setVisibility(View.VISIBLE);
+            } else {
+                errorText.setVisibility(View.GONE);
+            }
+        });
+
+        refreshBtn.setOnClickListener(v -> viewModel.refreshWeather());
+
+        PeriodicWorkRequest workRequest = new PeriodicWorkRequest.Builder(
+                WeatherWorker.class, 6, TimeUnit.HOURS).build();
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                "weather_fetch", ExistingPeriodicWorkPolicy.KEEP, workRequest);
+    }
+}
+
+// 9. WeatherAdapter.java (Simplified)
+public class WeatherAdapter extends RecyclerView.Adapter<WeatherAdapter.ViewHolder> {
+    private List<WeatherEntity> data = new ArrayList<>();
+
+    public void submitList(List<WeatherEntity> list) {
+        data = list;
+        notifyDataSetChanged();
+    }
+
+    @NonNull
+    @Override
+    public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        View view = LayoutInflater.from(parent.getContext())
+                .inflate(R.layout.weather_item, parent, false);
+        return new ViewHolder(view);
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
+        WeatherEntity w = data.get(position);
+        holder.temp.setText("Temp: " + w.temperature);
+        holder.hum.setText("Humidity: " + w.humidity);
+        holder.cond.setText(w.condition);
+    }
+
+    @Override
+    public int getItemCount() {
+        return data.size();
+    }
+
+    static class ViewHolder extends RecyclerView.ViewHolder {
+        TextView temp, hum, cond;
+
+        ViewHolder(@NonNull View itemView) {
+            super(itemView);
+            temp = itemView.findViewById(R.id.temp);
+            hum = itemView.findViewById(R.id.hum);
+            cond = itemView.findViewById(R.id.cond);
+        }
+    }
+}
