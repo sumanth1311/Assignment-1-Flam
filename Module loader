@@ -1,0 +1,32 @@
+bool hasCircularDependency(int n, vector<vector<int>>& edges) {
+    // Build adjacency list
+    vector<vector<int>> graph(n);
+    for (auto& edge : edges) {
+        graph[edge[0]].push_back(edge[1]);
+    }
+
+    vector<bool> visited(n, false);
+    vector<bool> recStack(n, false); // recursion stack
+
+    function<bool(int)> dfs = [&](int node) {
+        if (recStack[node]) return true;  // cycle detected
+        if (visited[node]) return false;  // already processed
+
+        visited[node] = true;
+        recStack[node] = true;
+
+        for (int neighbor : graph[node]) {
+            if (dfs(neighbor)) return true;
+        }
+
+        recStack[node] = false; // backtrack
+        return false;
+    };
+
+    for (int i = 0; i < n; ++i) {
+        if (!visited[i] && dfs(i)) {
+            return true;
+        }
+    }
+    return false;
+}
